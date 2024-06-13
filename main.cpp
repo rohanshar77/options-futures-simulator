@@ -6,12 +6,28 @@
 #include <algorithm>
 #include <fstream>
 #include <sstream>
+#include <torch/torch.h>
 
 using namespace std;
 
 const double INITIAL_PRICE = 100.0;
 const double SPREAD = 1.0;
 const double RISK_FREE_RATE = 0.05;
+
+struct Option {
+    string symbol;
+    double strike;
+    double expiry;
+    double price;
+    int quantity;
+};
+
+struct Future {
+    string symbol;
+    double expiry;
+    double price;
+    int quantity;
+};
 
 double generateRandomNumber(double mean, double std_dev) {
     unsigned seed = chrono::system_clock::now().time_since_epoch().count();
@@ -25,14 +41,6 @@ void calculateBidAsk(double mid_price, double& bid_price, double& ask_price) {
     bid_price = mid_price - half_spread;
     ask_price = mid_price + half_spread;
 }
-
-struct Option {
-    string symbol;
-    double strike;
-    double expiry;
-    double price;
-    int quantity;
-};
 
 double N(double x) {
     return 0.5 * (1 + erf(x / sqrt(2)));
@@ -61,18 +69,37 @@ void handleSellOrder(const Option& option, double ask_price, double& optionsPnL)
     optionsPnL += pnl;
 }
 
+void handleBuyOrder(const Future& future, double bid_price, double& futuresPnL) {
+    double pnl = (future.price - bid_price) * future.quantity;
+    futuresPnL += pnl;
+}
+
+void handleSellOrder(const Future& future, double ask_price, double& futuresPnL) {
+    double pnl = (ask_price - future.price) * future.quantity;
+    futuresPnL += pnl;
+}
+
+torch::Tensor loadTrainingData(const string& file_path) {
+    ifstream file(file_path);
+    vector<vector<float>> data;
+    string line;
+    while (getline(file, line)) {
+        istringstream iss(line);
+        vector<float> row;
+        float val;
+        while (iss >> val) {
+            row.push_back(val);
+        }
+        data.push_back(row);
+    }
+    file.close();
+
+    auto options_data = torch::from_blob(data.data(), {data.size(), data[0].size()});
+    return options_data;
+}
+
 int main() {
     double current_price = INITIAL_PRICE;
-    double bid_price, ask_price;
-
-    // Simulate price changes and calculate bid/ask prices
-    for (int i = 1; i <= 10; ++i) {
-        double price_change = generateRandomNumber(0.0, 1.0); // Use a fixed standard deviation for now
-        double mid_price = current_price + price_change;
-        calculateBidAsk(mid_price, bid_price, ask_price);
-        current_price = mid_price;
-        cout << "Mid price: " << mid_price << ", Bid price: " << bid_price << ", Ask price: " << ask_price << endl;
-    }
 
     vector<Option> options{
         {"TSLA", 650.0, 0.25, 0.0, 0},
@@ -81,20 +108,57 @@ int main() {
         {"AMD", 95.0, 1.0, 0.0, 0}
     };
 
-    double optionsPnL = 0.0;
+    vector<Future> futures{
+        {"CL", 1.0, 0.0, 0},
+        {"ES", 1.0, 0.0, 0},
+        {"NQ", 1.0, 0.0, 0},
+        {"GC", 1.0, 0.0, 0}
+    };
 
-    for (auto& option : options) {
-        option.price = blackScholes(current_price, option.strike, option.expiry, RISK_FREE_RATE, 0.2, true); // Assume fixed volatility for now
+    double optionsPnL = 0.0;
+    double futuresPnL = 0.0;
+
+    torch::Tensor training_data = loadTrainingData("volatility_data.csv");
+
+    for (int i = 1; i <= 10; ++i) {
+        double price_change = generateRandomNumber(0.0, 1.0); // Use a fixed standard deviation for now
+
+        double mid_price = current_price + price_change;
+
+        double bid_price, ask_price;
+        calculateBidAsk(mid_price, bid_price, ask_price);
+
+        current_price = mid_price;
+
+        for (auto& option : options) {
+            option.price = blackScholes(current_price, option.strike, option.expiry, RISK_FREE_RATE, 0.2, true);
+        }
+
+        for (auto& future : futures) {
+            future.price = current_price;
+        }
 
         // Handle buy and sell orders for options
-        if (option.quantity > 0) {
-            handleSellOrder(option, ask_price, optionsPnL);
-        } else if (option.quantity < 0) {
-            handleBuyOrder(option, bid_price, optionsPnL);
+        for (auto& option : options) {
+            if (option.quantity > 0) {
+                handleSellOrder(option, ask_price, optionsPnL);
+            } else if (option.quantity < 0) {
+                handleBuyOrder(option, bid_price, optionsPnL);
+            }
+        }
+
+        // Handle buy and sell orders for futures
+        for (auto& future : futures) {
+            if (future.quantity > 0) {
+                handleSellOrder(future, ask_price, futuresPnL);
+            } else if (future.quantity < 0) {
+                handleBuyOrder(future, bid_price, futuresPnL);
+            }
         }
     }
 
     cout << "Options PnL: " << optionsPnL << endl;
+    cout << "Futures PnL: " << futuresPnL << endl;
 
     return 0;
 }
