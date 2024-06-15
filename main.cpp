@@ -29,9 +29,11 @@ struct Future {
     int quantity;
 };
 
+// Seed the random number generator once
+unsigned seed = chrono::system_clock::now().time_since_epoch().count();
+default_random_engine generator(seed);
+
 double generateRandomNumber(double mean, double std_dev) {
-    unsigned seed = chrono::system_clock::now().time_since_epoch().count();
-    default_random_engine generator(seed);
     normal_distribution<double> distribution(mean, std_dev);
     return distribution(generator);
 }
@@ -81,6 +83,11 @@ void handleSellOrder(const Future& future, double ask_price, double& futuresPnL)
 
 torch::Tensor loadTrainingData(const string& file_path) {
     ifstream file(file_path);
+    if (!file.is_open()) {
+        cerr << "Error opening file: " << file_path << endl;
+        exit(EXIT_FAILURE);
+    }
+
     vector<vector<float>> data;
     string line;
     while (getline(file, line)) {
@@ -94,7 +101,15 @@ torch::Tensor loadTrainingData(const string& file_path) {
     }
     file.close();
 
-    auto options_data = torch::from_blob(data.data(), {data.size(), data[0].size()});
+    // Convert nested vector to a single flat vector for tensor creation
+    vector<float> flat_data;
+    size_t rows = data.size();
+    size_t cols = data[0].size();
+    for (const auto& row : data) {
+        flat_data.insert(flat_data.end(), row.begin(), row.end());
+    }
+
+    auto options_data = torch::from_blob(flat_data.data(), {rows, cols}).clone();
     return options_data;
 }
 
@@ -118,7 +133,7 @@ int main() {
     double optionsPnL = 0.0;
     double futuresPnL = 0.0;
 
-    torch::Tensor training_data = loadTrainingData("volatility_data.csv");
+    torch::Tensor training_data = loadTrainingData("vdata.csv");
 
     for (int i = 1; i <= 10; ++i) {
         double price_change = generateRandomNumber(0.0, 1.0); // Use a fixed standard deviation for now
